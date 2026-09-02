@@ -6,9 +6,9 @@ export const overview = query({
   handler: async (ctx) => {
     await requireVirtualFitPathAdmin(ctx);
     const [products, orders, customers] = await Promise.all([
-      ctx.db.query("products").collect(),
-      ctx.db.query("orders").collect(),
-      ctx.db.query("customers").collect(),
+      ctx.db.query("products").take(250),
+      ctx.db.query("orders").withIndex("by_created_at").order("desc").take(500),
+      ctx.db.query("customers").take(500),
     ]);
     const paid = orders.filter((order) => ["paid", "fulfilled"].includes(order.status));
     return {

@@ -2,9 +2,9 @@ import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { requireVirtualFitPathAdmin } from "./lib/auth";
 
-export const customers = query({ args: {}, handler: async (ctx) => { await requireVirtualFitPathAdmin(ctx); return ctx.db.query("customers").collect(); } });
-export const discounts = query({ args: {}, handler: async (ctx) => { await requireVirtualFitPathAdmin(ctx); return ctx.db.query("discounts").collect(); } });
-export const batches = query({ args: {}, handler: async (ctx) => { await requireVirtualFitPathAdmin(ctx); return ctx.db.query("batches").collect(); } });
+export const customers = query({ args: {}, handler: async (ctx) => { await requireVirtualFitPathAdmin(ctx); return ctx.db.query("customers").take(500); } });
+export const discounts = query({ args: {}, handler: async (ctx) => { await requireVirtualFitPathAdmin(ctx); return ctx.db.query("discounts").take(250); } });
+export const batches = query({ args: {}, handler: async (ctx) => { await requireVirtualFitPathAdmin(ctx); return ctx.db.query("batches").take(500); } });
 export const settings = query({ args: {}, handler: async (ctx) => { await requireVirtualFitPathAdmin(ctx); return ctx.db.query("storeSettings").withIndex("by_singleton", (q) => q.eq("singleton", "main")).unique(); } });
 
 export const createDiscount = mutation({
