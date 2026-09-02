@@ -13,6 +13,7 @@ import type * as adminAuth from "../adminAuth.js";
 import type * as auth from "../auth.js";
 import type * as branding from "../branding.js";
 import type * as catalog from "../catalog.js";
+import type * as commerce from "../commerce.js";
 import type * as dashboard from "../dashboard.js";
 import type * as http from "../http.js";
 import type * as lib_auth from "../lib/auth.js";
@@ -31,6 +32,7 @@ declare const fullApi: ApiFromModules<{
   auth: typeof auth;
   branding: typeof branding;
   catalog: typeof catalog;
+  commerce: typeof commerce;
   dashboard: typeof dashboard;
   http: typeof http;
   "lib/auth": typeof lib_auth;

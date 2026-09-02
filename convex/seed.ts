@@ -24,7 +24,7 @@ export const run = mutation({
     if (existing) return { seeded: false };
     const now = Date.now();
     for (const [slug, name, category, description, image, badge, variants] of products) {
-      await ctx.db.insert("products", { slug, name, category, description, image, badge: badge || undefined, active: true, updatedAt: now, variants: variants.map(([sku, strength, price, inventory]) => ({ sku, strength, price, inventory, lowStockAt: 12, active: true })) });
+      await ctx.db.insert("products", { slug, name, category, description, image, ...(badge ? { badge } : {}), featured: true, sortOrder: now, active: true, updatedAt: now, variants: variants.map(([sku, strength, price, inventory]) => ({ sku, strength, price, inventory, lowStockAt: 12, active: true })) });
     }
     await ctx.db.insert("storeSettings", { singleton: "main", storeName: "VirtualFitPath", supportPhone: "800-637-9046", legalName: "Virtual Fit Path, LLC", freeShippingThreshold: 100, minimumOrder: 100, checkoutEnabled: false, announcement: "Free U.S. shipping on qualifying $100+ research orders", updatedAt: now });
     await ctx.db.insert("discounts", { code: "LAB10", type: "percent", amount: 10, active: true, usageCount: 0, startsAt: now });

@@ -2,65 +2,20 @@ import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { requireVirtualFitPathAdmin } from "./lib/auth";
 
-const itemValidator = v.object({ sku: v.string(), name: v.string(), strength: v.string(), quantity: v.number(), unitPrice: v.number() });
-
-export const list = query({ args: {}, handler: async (ctx) => {
-  await requireVirtualFitPathAdmin(ctx);
-  return (await ctx.db.query("orders").collect()).sort((a, b) => b.createdAt - a.createdAt);
+const status = v.union(v.literal("draft"), v.literal("pending"), v.literal("paid"), v.literal("fulfilled"), v.literal("cancelled"), v.literal("refunded"));
+export const list = query({ args: {}, handler: async (ctx) => { await requireVirtualFitPathAdmin(ctx); return ctx.db.query("orders").withIndex("by_created_at").order("desc").take(250); } });
+export const createDraft = mutation({ args: { email: v.string(), firstName: v.string(), lastName: v.string(), phone: v.optional(v.string()), items: v.array(v.object({ sku: v.string(), quantity: v.number(), name: v.optional(v.string()), strength: v.optional(v.string()), unitPrice: v.optional(v.number()) })), discountCode: v.optional(v.string()), shippingMethodId: v.optional(v.string()), shippingAddress: v.object({ line1: v.string(), line2: v.optional(v.string()), city: v.string(), state: v.string(), postalCode: v.string(), country: v.string() }) }, handler: async (ctx, args) => {
+  const [settings, payment] = await Promise.all([ctx.db.query("storeSettings").withIndex("by_singleton", (q) => q.eq("singleton", "main")).unique(), ctx.db.query("paymentSettings").withIndex("by_singleton", (q) => q.eq("singleton", "main")).unique()]);
+  if (!settings?.checkoutEnabled || payment?.enabled === false) throw new Error("Secure checkout is not accepting orders yet"); if (!args.items.length) throw new Error("Cart is empty");
+  const products = await ctx.db.query("products").withIndex("by_active", (q) => q.eq("active", true)).take(250); const canonical = args.items.map((requested) => { const product = products.find((entry) => entry.variants.some((item) => item.sku === requested.sku)); const item = product?.variants.find((entry) => entry.sku === requested.sku && entry.active); const quantity = Math.max(1, Math.min(25, Math.floor(requested.quantity))); if (!product || !item) throw new Error(`Product ${requested.sku} is unavailable`); if (item.inventory < quantity) throw new Error(`${product.name} ${item.strength} does not have enough stock`); return { sku: item.sku, name: product.name, strength: item.strength, quantity, unitPrice: item.price }; });
+  const subtotal = canonical.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0); const minimum = settings.minimumOrder || 0; if (subtotal < minimum) throw new Error(`Orders must total at least $${minimum.toFixed(2)}`);
+  let discount = 0; if (args.discountCode?.trim()) { const record = await ctx.db.query("discounts").withIndex("by_code", (q) => q.eq("code", args.discountCode!.trim().toUpperCase())).unique(); if (record?.active && record.startsAt <= Date.now() && (!record.endsAt || record.endsAt > Date.now())) { discount = record.type === "percent" ? subtotal * record.amount / 100 : Math.min(subtotal, record.amount); await ctx.db.patch(record._id, { usageCount: record.usageCount + 1 }); } }
+  const methods = await ctx.db.query("shippingMethods").withIndex("by_enabled_and_sort_order", (q) => q.eq("enabled", true)).take(20); const method = methods.find((entry) => entry._id === args.shippingMethodId) ?? methods[0]; const shipping = method && (!method.freeAbove || subtotal < method.freeAbove) ? method.price : 0;
+  const now = Date.now(); const orderNumber = `VFP-${new Date(now).toISOString().slice(2, 10).replaceAll("-", "")}-${String(now).slice(-5)}`; const checkoutToken = crypto.randomUUID(); const total = Math.round((subtotal - discount + shipping) * 100) / 100; const email = args.email.trim().toLowerCase();
+  const customer = await ctx.db.query("customers").withIndex("by_email", (q) => q.eq("email", email)).unique(); const identity = { firstName: args.firstName.trim(), lastName: args.lastName.trim(), ...(args.phone ? { phone: args.phone } : {}) }; if (!customer) await ctx.db.insert("customers", { email, ...identity, orderCount: 0, lifetimeValue: 0, createdAt: now, updatedAt: now }); else await ctx.db.patch(customer._id, { ...identity, updatedAt: now });
+  const orderId = await ctx.db.insert("orders", { orderNumber, checkoutToken, customerEmail: email, customerName: `${args.firstName.trim()} ${args.lastName.trim()}`, status: "pending", paymentStatus: "unpaid", items: canonical, subtotal, discount, shipping, total, shippingMethodName: method?.name ?? "Standard U.S. shipping", shippingAddress: args.shippingAddress, createdAt: now, updatedAt: now }); return { orderId, orderNumber, checkoutToken, total };
 } });
-
-export const createDraft = mutation({
-  args: {
-    email: v.string(), firstName: v.string(), lastName: v.string(), phone: v.optional(v.string()),
-    items: v.array(itemValidator), discountCode: v.optional(v.string()),
-    shippingAddress: v.object({ line1: v.string(), line2: v.optional(v.string()), city: v.string(), state: v.string(), postalCode: v.string(), country: v.string() }),
-  },
-  handler: async (ctx, args) => {
-    const settings = await ctx.db.query("storeSettings").withIndex("by_singleton", (q) => q.eq("singleton", "main")).unique();
-    if (!settings?.checkoutEnabled) throw new Error("Secure checkout is not accepting orders yet");
-    if (!args.items.length) throw new Error("Cart is empty");
-    const subtotal = args.items.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
-    if (subtotal < 100) throw new Error("Orders must total at least $100");
-    let discount = 0;
-    if (args.discountCode) {
-      const record = await ctx.db.query("discounts").withIndex("by_code", (q) => q.eq("code", args.discountCode!.toUpperCase())).unique();
-      if (record?.active && record.startsAt <= Date.now() && (!record.endsAt || record.endsAt > Date.now())) {
-        discount = record.type === "percent" ? subtotal * record.amount / 100 : Math.min(subtotal, record.amount);
-        await ctx.db.patch(record._id, { usageCount: record.usageCount + 1 });
-      }
-    }
-    const now = Date.now();
-    const orderNumber = `VFP-${new Date(now).toISOString().slice(2, 10).replaceAll("-", "")}-${String(now).slice(-5)}`;
-    const total = Math.round((subtotal - discount) * 100) / 100;
-    const customer = await ctx.db.query("customers").withIndex("by_email", (q) => q.eq("email", args.email.toLowerCase())).unique();
-    if (!customer) {
-      await ctx.db.insert("customers", { email: args.email.toLowerCase(), firstName: args.firstName, lastName: args.lastName, phone: args.phone, orderCount: 0, lifetimeValue: 0, createdAt: now, updatedAt: now });
-    }
-    const orderId = await ctx.db.insert("orders", {
-      orderNumber, customerEmail: args.email.toLowerCase(), customerName: `${args.firstName} ${args.lastName}`,
-      status: "pending", paymentStatus: "unpaid", items: args.items, subtotal, discount, shipping: 0, total,
-      shippingAddress: args.shippingAddress, createdAt: now, updatedAt: now,
-    });
-    return { orderId, orderNumber, total };
-  },
-});
-
-export const updateStatus = mutation({
-  args: { orderId: v.id("orders"), status: v.union(v.literal("draft"), v.literal("pending"), v.literal("paid"), v.literal("fulfilled"), v.literal("cancelled"), v.literal("refunded")) },
-  handler: async (ctx, args) => {
-    await requireVirtualFitPathAdmin(ctx);
-    return ctx.db.patch(args.orderId, { status: args.status, updatedAt: Date.now() });
-  },
-});
-
-export const recordPayment = mutation({
-  args: { orderNumber: v.string(), secret: v.string() },
-  handler: async (ctx, args) => {
-    if (!process.env.ORDER_WRITE_SECRET || args.secret !== process.env.ORDER_WRITE_SECRET) throw new Error("Unauthorized");
-    const order = await ctx.db.query("orders").withIndex("by_order_number", (q) => q.eq("orderNumber", args.orderNumber)).unique();
-    if (!order || order.paymentStatus === "paid") return;
-    await ctx.db.patch(order._id, { status: "paid", paymentStatus: "paid", updatedAt: Date.now() });
-    const customer = await ctx.db.query("customers").withIndex("by_email", (q) => q.eq("email", order.customerEmail)).unique();
-    if (customer) await ctx.db.patch(customer._id, { orderCount: customer.orderCount + 1, lifetimeValue: customer.lifetimeValue + order.total, updatedAt: Date.now() });
-  },
-});
+export const getCheckout = query({ args: { orderNumber: v.string(), checkoutToken: v.string() }, handler: async (ctx, args) => { const order = await ctx.db.query("orders").withIndex("by_order_number", (q) => q.eq("orderNumber", args.orderNumber)).unique(); if (!order || order.checkoutToken !== args.checkoutToken || order.paymentStatus !== "unpaid") return null; return { orderNumber: order.orderNumber, customerEmail: order.customerEmail, items: order.items, shipping: order.shipping, shippingMethodName: order.shippingMethodName, total: order.total }; } });
+export const updateStatus = mutation({ args: { orderId: v.id("orders"), status }, handler: async (ctx, args) => { await requireVirtualFitPathAdmin(ctx); if (args.status === "refunded") return ctx.db.patch(args.orderId, { status: args.status, paymentStatus: "refunded", updatedAt: Date.now() }); return ctx.db.patch(args.orderId, { status: args.status, updatedAt: Date.now() }); } });
+export const updateFulfillment = mutation({ args: { orderId: v.id("orders"), trackingNumber: v.string(), internalNotes: v.string() }, handler: async (ctx, args) => { await requireVirtualFitPathAdmin(ctx); return ctx.db.patch(args.orderId, { trackingNumber: args.trackingNumber, internalNotes: args.internalNotes, updatedAt: Date.now() }); } });
+export const recordPayment = mutation({ args: { orderNumber: v.string(), secret: v.string() }, handler: async (ctx, args) => { if (!process.env.ORDER_WRITE_SECRET || args.secret !== process.env.ORDER_WRITE_SECRET) throw new Error("Unauthorized"); const order = await ctx.db.query("orders").withIndex("by_order_number", (q) => q.eq("orderNumber", args.orderNumber)).unique(); if (!order || order.paymentStatus === "paid") return null; const [customer, products] = await Promise.all([ctx.db.query("customers").withIndex("by_email", (q) => q.eq("email", order.customerEmail)).unique(), ctx.db.query("products").take(250)]); const productUpdates = products.flatMap((product) => { const lines = order.items.filter((line) => product.variants.some((item) => item.sku === line.sku)); if (!lines.length) return []; return [ctx.db.patch(product._id, { variants: product.variants.map((item) => { const line = lines.find((entry) => entry.sku === item.sku); return line ? { ...item, inventory: Math.max(0, item.inventory - line.quantity) } : item; }), updatedAt: Date.now() })]; }); await Promise.all([ctx.db.patch(order._id, { status: "paid", paymentStatus: "paid", checkoutToken: "", updatedAt: Date.now() }), ...(customer ? [ctx.db.patch(customer._id, { orderCount: customer.orderCount + 1, lifetimeValue: customer.lifetimeValue + order.total, updatedAt: Date.now() })] : []), ...productUpdates]); return null; } });

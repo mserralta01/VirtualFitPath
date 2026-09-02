@@ -1,4 +1,5 @@
 import { mutation } from "./_generated/server";
+import { requireVirtualFitPathAdmin } from "./lib/auth";
 
 const newSku = (sku: string) => sku.startsWith("AX-") || sku.startsWith("TP-") ? `VFP-${sku.slice(3)}` : sku;
 
@@ -9,12 +10,13 @@ const newSku = (sku: string) => sku.startsWith("AX-") || sku.startsWith("TP-") ?
 export const applyVirtualFitPath = mutation({
   args: {},
   handler: async (ctx) => {
+    await requireVirtualFitPathAdmin(ctx);
     const now = Date.now();
     let updatedProducts = 0;
     let updatedOrders = 0;
     const [products, orders, settings] = await Promise.all([
-      ctx.db.query("products").collect(),
-      ctx.db.query("orders").collect(),
+      ctx.db.query("products").take(250),
+      ctx.db.query("orders").withIndex("by_created_at").take(500),
       ctx.db.query("storeSettings").withIndex("by_singleton", (q) => q.eq("singleton", "main")).unique(),
     ]);
 
@@ -49,7 +51,7 @@ export const applyVirtualFitPath = mutation({
         storeName: "VirtualFitPath",
         legalName: "Virtual Fit Path, LLC",
         supportPhone: "800-637-9046",
-        supportEmail: undefined,
+        supportEmail: "",
         updatedAt: now,
       });
     }

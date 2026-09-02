@@ -3,14 +3,16 @@
 import Link from "next/link";
 import { notFound, useParams } from "next/navigation";
 import { useState } from "react";
+import { useQuery } from "convex/react";
+import { api } from "../../../../convex/_generated/api";
 import { ShieldCheck, TestTube2, Truck } from "lucide-react";
 import { StoreLayout, useCart } from "@/components/store-shell";
 import { VirtualFitPathVial } from "@/components/virtualfitpath-vial";
-import { getProduct, money } from "@/lib/catalog";
+import { getProduct, money, type Product } from "@/lib/catalog";
 
 export default function ProductPage() {
   const { slug } = useParams<{ slug: string }>();
-  const product = getProduct(slug);
+  const liveProduct = useQuery(api.catalog.getActiveBySlug, { slug }); const product = (liveProduct === undefined ? getProduct(slug) : liveProduct) as Product | null | undefined;
   const { add } = useCart();
   const [variantIndex, setVariantIndex] = useState(0);
   if (!product) return notFound();
